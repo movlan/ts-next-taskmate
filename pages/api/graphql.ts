@@ -1,6 +1,8 @@
-import { ApolloServer, gql } from "apollo-server-micro";
-import { IResolvers } from "@graphql-tools/utils";
+import { ApolloServer, gql, UserInputError } from "apollo-server-micro";
 import mysql from "serverless-mysql";
+import { OkPacket } from "mysql";
+import { Resolvers, TaskStatus } from "../../generated/graphql-backend";
+import { NextApiRequest, NextApiResponse } from "next";
 
 const typeDefs = gql`
   enum TaskStatus {
@@ -40,29 +42,96 @@ interface ApolloContext {
   db: mysql.ServerlessMysql;
 }
 
-const resolvers: IResolvers<any, ApolloContext> = {
+interface DbTaskRow {
+  id: number;
+  title: string;
+  task_status: TaskStatus;
+}
+type DbTasksQueryResult = DbTaskRow[];
+type DbTaskQueryResult = DbTaskRow[];
+
+const getTaskById = async (id: number, db: mysql.ServerlessMysql) => {
+  const task = await db.query<DbTaskQueryResult>(
+    "SELECT * FROM tasks WHERE id = ?",
+    [id]
+  );
+  return task.length
+    ? {
+        id: task[0].id,
+        title: task[0].title,
+        status: task[0].task_status,
+      }
+    : null;
+};
+
+const resolvers: Resolvers<ApolloContext> = {
   Query: {
     async tasks(parent, args, context) {
-      const result = await context.db.query(
-        'SELECT "HELLO WORLD" AS hello_world'
+      const { status } = args;
+      let query = "SELECT id, title, task_status FROM tasks";
+      const queryParams: string[] = [];
+
+      if (status) {
+        query += " WHERE task_status = ?";
+        queryParams.push(status);
+      }
+      const tasks = await context.db.query<DbTasksQueryResult>(
+        query,
+        queryParams
       );
-      await db.end();
-      console.log({ result });
-      return [];
+      await context.db.end();
+      return tasks.map(({ id, title, task_status }) => ({
+        id,
+        title,
+        status: task_status,
+      }));
     },
-    task(parent, args, context) {
-      return null;
+    async task(parent, args, context) {
+      return await getTaskById(args.id, context.db);
     },
   },
   Mutation: {
-    createTask(parent, args, context) {
-      return null;
+    async createTask(parent, args, context) {
+      const result = await context.db.query<OkPacket>(
+        "INSERT INTO tasks (title, task_status) VALUES (?, ?)",
+        [args.input.title, TaskStatus.Active]
+      );
+      return {
+        id: result.insertId,
+        title: args.input.title,
+        status: TaskStatus.Active,
+      };
     },
-    updateTask(parent, args, context) {
-      return null;
+    async updateTask(parent, args, context) {
+      const columns: string[] = [];
+      const sqlParams: any[] = [];
+      const { id, title, status } = args.input;
+      if (title) {
+        columns.push("title = ?");
+        sqlParams.push(title);
+      }
+      if (status) {
+        columns.push("task_status = ?");
+        sqlParams.push(status);
+      }
+      sqlParams.push(id);
+      await context.db.query(
+        `UPDATE tasks SET ${columns.join(", ")} WHERE id = ?`,
+        sqlParams
+      );
+
+      return await getTaskById(id, context.db);
     },
-    deleteTask(parent, args, context) {
-      return null;
+    async deleteTask(parent, args, context) {
+      const task = await getTaskById(args.id, context.db);
+
+      if (!task) {
+        throw new UserInputError("Could not find your task.");
+      }
+
+      await context.db.query("DELETE FROM tasks WHERE id = ?", [args.id]);
+
+      return task;
     },
   },
 };
@@ -80,7 +149,10 @@ const apolloServer = new ApolloServer({ typeDefs, resolvers, context: { db } });
 
 const startServer = apolloServer.start();
 
-export default async function handler(req, res) {
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse
+) {
   res.setHeader("Access-Control-Allow-Credentials", "true");
   res.setHeader(
     "Access-Control-Allow-Origin",
