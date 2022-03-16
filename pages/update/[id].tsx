@@ -2,7 +2,7 @@ import { GetServerSideProps } from "next";
 import Error from "next/error";
 import { useRouter } from "next/router";
 import React from "react";
-import UpdateTaskForm from "../../components/UpdatetaskForm";
+import UpdateTaskForm from "../../components/UpdateTaskForm";
 import {
   TaskDocument,
   TaskQuery,
@@ -28,7 +28,7 @@ const UpdateTask = () => {
   ) : error ? (
     <p>An error occurred.</p>
   ) : task ? (
-    <UpdateTaskForm initialValues={{ title: task.title }} />
+    <UpdateTaskForm id={task.id} initialValues={{ title: task.title }} />
   ) : (
     <p>Task not found.</p>
   );
